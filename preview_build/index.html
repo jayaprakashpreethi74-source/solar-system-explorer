@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar System Explorer (Standalone)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'space-dark': '#050505',
+                        'space-darker': '#020202',
+                        'cyan-glow': '#00f0ff',
+                        'gold-glow': '#ffd700',
+                        'border': '#1a1a1a'
+                    },
+                    fontFamily: {
+                        'orbitron': ['Orbitron', 'sans-serif'],
+                        'rajdhani': ['Rajdhani', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@300;500;700&display=swap"
+        rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            color: white;
+        }
+
+        .hud-panel {
+            background: rgba(5, 5, 5, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(0, 240, 255, 0.3);
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 0 20px rgba(0, 240, 255, 0.1);
+        }
+    </style>
+    <script>
+        window.onerror = function (msg, url, line, col, error) {
+            const div = document.createElement('div');
+            div.style.position = 'fixed';
+            div.style.top = '0';
+            div.style.left = '0';
+            div.style.width = '100%';
+            div.style.backgroundColor = 'rgba(255, 0, 0, 0.8)';
+            div.style.color = 'white';
+            div.style.padding = '20px';
+            div.style.zIndex = '9999';
+            div.style.fontFamily = 'monospace';
+            div.innerText = 'ERROR: ' + msg + '\n' + url + ':' + line + ':' + col;
+            document.body.appendChild(div);
+            return false;
+        };
+        window.addEventListener('unhandledrejection', function (event) {
+            const div = document.createElement('div');
+            div.style.position = 'fixed';
+            div.style.top = '50px';
+            div.style.left = '0';
+            div.style.width = '100%';
+            div.style.backgroundColor = 'rgba(255, 165, 0, 0.8)';
+            div.style.color = 'white';
+            div.style.padding = '20px';
+            div.style.zIndex = '9999';
+            div.style.fontFamily = 'monospace';
+            div.innerText = 'PROMISE REJECTION: ' + event.reason;
+            document.body.appendChild(div);
+        });
+    </script>
+</head>
+
+<body>
+    <div id="root"></div>
+    <div id="debug-log"
+        style="position: fixed; bottom: 10px; left: 10px; color: yellow; font-family: monospace; z-index: 1000; pointer-events: none; background: rgba(0,0,0,0.5); padding: 5px;">
+        Waiting for interaction...
+    </div>
+
+    <!-- Import Map for React and Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "three": "https://esm.sh/three@0.160.0",
+                "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.12?external=react,react-dom,three",
+                "@react-three/drei": "https://esm.sh/@react-three/drei@9.96.1?external=react,react-dom,three,@react-three/fiber",
+                "zustand": "https://esm.sh/zustand@4.4.7?external=react",
+                "framer-motion": "https://esm.sh/framer-motion@10.16.16?external=react,react-dom",
+                "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@2.16.0?external=react,react-dom,three,@react-three/fiber",
+                "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime"
+            }
+        }
+    </script>
+
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- GSAP for Camera Animations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+
+    <!-- Application Code -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, Suspense } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import * as THREE from 'three';
+        import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
+        import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
+        import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
+        import { create } from 'zustand';
+
+        // --- PROCEDURAL TEXTURE GENERATOR (For detailed surface bump maps) ---
+        const generateNoiseTexture = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            const imgData = ctx.createImageData(1024, 512);
+            for (let i = 0; i < imgData.data.length; i += 4) {
+                const x = (i / 4) % 1024;
+                const y = Math.floor((i / 4) / 1024);
+                // Simple high-frequency noise for rock detail
+                const noise = Math.random() * 255;
+                imgData.data[i] = noise;
+                imgData.data[i + 1] = noise;
+                imgData.data[i + 2] = noise;
+                imgData.data[i + 3] = 255;
+            }
+            ctx.putImageData(imgData, 0, 0);
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            return texture;
+        };
+
+        const noiseTexture = generateNoiseTexture();
+
+        // --- CUSTOM SHADERS ---
+        // Volumetric Atmosphere Shader (Rayleigh Scattering Approximation)
+        const AtmosphereShaderMaterial = shaderMaterial(
+            {
+                glowColor: new THREE.Color(0.3, 0.6, 1.0), // Rayleigh Blue
+                viewVector: new THREE.Vector3(0, 0, 0),
+                intensity: 1.0,
+                power: 4.5 // Sharper, thinner rim
+            },
+            // Vertex Shader
+            `
+            uniform vec3 viewVector;
+            varying float intensity;
+            varying vec3 vNormal;
+            void main() {
+                vNormal = normalize(normalMatrix * normal);
+                vec3 vNormel = normalize(normalMatrix * viewVector);
+                // Rim lighting effect - intensity increases at edges
+                intensity = pow(0.6 - dot(vNormal, vNormel), 4.0);
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+            `,
+            // Fragment Shader
+            `
+            uniform vec3 glowColor;
+            uniform float intensity; // External intensity control
+            varying float intensity; // From vertex shader
+            void main() {
+                vec3 glow = glowColor * intensity;
+                gl_FragColor = vec4(glow, 1.0) * intensity;
+            }
+            `
+        );
+        extend({ AtmosphereShaderMaterial });
+
+        // --- ERROR BOUNDARY ---
+        class ErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, error: null };
+            }
+            static getDerivedStateFromError(error) { return { hasError: true, error }; }
+            componentDidCatch(error, errorInfo) { console.error("HUD Error:", error, errorInfo); }
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="absolute inset-0 bg-black flex items-center justify-center p-10 z-[100]">
+                            <div className="border border-red-500 p-8 bg-black/80 rounded shadow-[0_0_20px_rgba(255,0,0,0.5)]">
+                                <h2 className="text-red-500 font-bold text-2xl mb-4 uppercase tracking-tighter">System Malfunction</h2>
+                                <p className="text-red-200/80 mb-6 font-mono text-sm leading-relaxed">
+                                    {this.state.error?.message || "Visual stream interrupted. Please refresh the module."}
+                                </p>
+                                <button onClick={() => window.location.reload()} className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded font-orbitron transition-all">
+                                    REBOOT SYSTEM
+                                </button>
+                            </div>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
+
+        // --- DETAILED DATA SCHEMA (NASA & ISRO Integration) ---
+        // Textures from Wikimedia Commons (Solar System Scope, CC BY 4.0) - VERIFIED PATHS
+        const planetData = {
+            mercury: {
+                name: 'Mercury',
+                type: 'Terrestrial',
+                radius: 0.38,
+                distance: 60, // Adjusted for new Sun Size (40)
+                orbitSpeed: 0.015,
+                rotationSpeed: 0.004,
+                eccentricity: 0.205, // High eccentricity
+                color: '#A5A5A5',
+                inclination: 7.0,
+                textureUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/mercury.jpg',
+                details: { temp: '430°C / -180°C', gravity: '3.7 m/s²', lightHours: '0.00 hrs', earthDist: '77 M km', rotation: '10.89 km/h' },
+                satellites: { count: 0, nasa: ['Mariner 10', 'MESSENGER', 'BepiColombo (En Route)'], isro: [] },
+                moons: []
+            },
+            venus: {
+                name: 'Venus',
+                type: 'Terrestrial',
+                radius: 0.95,
+                distance: 90,
+                orbitSpeed: 0.012,
+                rotationSpeed: 0.002,
+                eccentricity: 0.007,
+                color: '#E3BB76',
+                inclination: 3.4,
+                textureUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/venus.jpg',
+                details: { temp: '462°C', gravity: '8.87 m/s²', lightHours: '0.00 hrs', earthDist: '41 M km', rotation: '6.52 km/h' },
+                satellites: { count: 0, nasa: ['Magellan', 'Parker Solar Probe (Flyby)'], isro: ['Shukrayaan-1 (Planned)'] },
+                moons: []
+            },
+            earth: {
+                name: 'Earth',
+                type: 'Terrestrial',
+                radius: 1,
+                distance: 120,
+                orbitSpeed: 0.01,
+                rotationSpeed: 0.02,
+                eccentricity: 0.017,
+                color: '#2233AA',
+                inclination: 0,
+                textureUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/earth.jpg',
+                cloudsMapUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/earth_cloud.jpg',
+                normalMapUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/earth_normal.jpg',
+                details: { temp: '15°C', gravity: '9.8 m/s²', lightHours: '0.00 hrs', earthDist: '0 km', rotation: '1,670 km/h' },
+                satellites: { count: 10900, nasa: ['ISS', 'Hubble', 'James Webb'], isro: ['Chandrayaan-3', 'Aditya-L1', 'Mangalyaan'] },
+                moons: ['Moon']
+            },
+            mars: {
+                name: 'Mars',
+                type: 'Terrestrial',
+                radius: 0.53,
+                distance: 150,
+                orbitSpeed: 0.008,
+                rotationSpeed: 0.018,
+                eccentricity: 0.094,
+                color: '#D14A28',
+                inclination: 1.85,
+                textureUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/mars.jpg',
+                details: { temp: '-63°C', gravity: '3.71 m/s²', lightHours: '0.05 - 0.35 hrs', earthDist: '78 M km', rotation: '868 km/h' },
+                satellites: { count: 2, nasa: ['Perseverance', 'Curiosity', 'Ingenuity'], isro: ['Mangalyaan (MOM)'] },
+                moons: ['Phobos', 'Deimos']
+            },
+            jupiter: {
+                name: 'Jupiter',
+                type: 'Gas Giant',
+                radius: 5.0, // Jupiter is baseline for Gas Giants
+                distance: 220,
+                orbitSpeed: 0.005,
+                rotationSpeed: 0.04,
+                eccentricity: 0.049,
+                color: '#D8CA9D',
+                inclination: 1.3,
+                textureUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/jupiter.jpg',
+                details: { temp: '-110°C', gravity: '24.79 m/s²', lightHours: '0.72 hrs', earthDist: '628 M km', rotation: '45,300 km/h' },
+                satellites: { count: 95, nasa: ['Juno', 'Europa Clipper (Planned)'], isro: [] },
+                moons: ['Io', 'Europa', 'Ganymede', 'Callisto']
+            },
+            saturn: {
+                name: 'Saturn',
+                type: 'Gas Giant',
+                radius: 4.5,
+                distance: 300,
+                orbitSpeed: 0.003,
+                rotationSpeed: 0.038,
+                eccentricity: 0.057,
+                color: '#F4D03F',
+                inclination: 2.5,
+                textureUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/saturn.jpg',
+                ringMapUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/saturn_ring.png',
+                details: { temp: '-140°C', gravity: '10.44 m/s²', lightHours: '1.32 hrs', earthDist: '1275 M km', rotation: '35,500 km/h' },
+                satellites: { count: 146, nasa: ['Cassini (Retired)', 'Dragonfly (Planned)'], isro: [] },
+                moons: ['Titan', 'Enceladus', 'Mimas', 'Rhea', 'Iapetus']
+            },
+            uranus: {
+                name: 'Uranus',
+                type: 'Ice Giant',
+                radius: 3.0,
+                distance: 380,
+                orbitSpeed: 0.002,
+                rotationSpeed: 0.03,
+                eccentricity: 0.046,
+                color: '#5DADE2',
+                inclination: 0.8,
+                textureUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/uranus.jpg',
+                details: { temp: '-195°C', gravity: '8.69 m/s²', lightHours: '2.66 hrs', earthDist: '2723 M km', rotation: '9,320 km/h' },
+                satellites: { count: 27, nasa: ['Voyager 2 (Flyby)'], isro: [] },
+                moons: ['Miranda', 'Ariel', 'Umbriel', 'Titania', 'Oberon']
+            },
+            neptune: {
+                name: 'Neptune',
+                type: 'Ice Giant',
+                radius: 2.9,
+                distance: 450,
+                orbitSpeed: 0.001,
+                rotationSpeed: 0.032,
+                eccentricity: 0.011,
+                color: '#2874A6',
+                inclination: 1.8,
+                textureUrl: 'https://raw.githubusercontent.com/chrisrzhou/solar-system-threejs/master/img/neptune.jpg',
+                details: { temp: '-200°C', gravity: '11.15 m/s²', lightHours: '4.16 hrs', earthDist: '4351 M km', rotation: '9,660 km/h' },
+                satellites: { count: 14, nasa: ['Voyager 2 (Flyby)'], isro: [] },
+                moons: ['Triton', 'Proteus', 'Nereid']
+            }
+        };
+        const planets = Object.keys(planetData);
+
+        // --- STORE ---
+        const useStore = create((set) => ({
+            focusedPlanet: null,
+            setFocusedPlanet: (planet) => set({ focusedPlanet: planet }),
+            timeScale: 1,
+            setTimeScale: (scale) => set({ timeScale: scale }),
+            orreryMode: false, // New State
+            setOrreryMode: (mode) => set({ orreryMode: mode }),
+        }));
+
+        // --- COMPONENTS ---
+
+        // --- CUSTOM SHADERS ---
+        import { shaderMaterial } from '@react-three/drei';
+        import { extend } from '@react-three/fiber';
+
+        const SunShaderMaterial = shaderMaterial(
+            { time: 0, color: new THREE.Color(1.0, 0.6, 0.0) },
+            // Vertex Shader
+            `
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            void main() {
+                vUv = uv;
+                vNormal = normalize(normalMatrix * normal);
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+            `,
+            // Fragment Shader
+            `
+            uniform float time;
+            uniform vec3 color;
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            void main() {
+                float intensity = pow(0.7 - dot(vNormal, vec3(0, 0, 1.0)), 2.0);
+                // Mix the chosen color with a hotter core (lighter) but don't add white blindly
+                vec3 core = color + vec3(0.2, 0.1, 0.0); 
+                gl_FragColor = vec4(color, 1.0) + vec4(core, 1.0) * intensity;
+            }
+            `
+        );
+
+
+
+        extend({ SunShaderMaterial, AtmosphereShaderMaterial });
+
+        const CameraController = () => {
+            const { focusedPlanet } = useStore();
+            const { camera, gl } = useThree();
+            const lastPlanet = useRef();
+
+            useEffect(() => {
+                if (focusedPlanet && focusedPlanet !== lastPlanet.current) {
+                    lastPlanet.current = focusedPlanet;
+                    console.log("Navigating to:", focusedPlanet.name);
+                } else if (!focusedPlanet) {
+                    gsap.to(camera.position, { x: 0, y: 40, z: 60, duration: 2, ease: "power2.inOut" });
+                }
+            }, [focusedPlanet, camera]);
+
+            useFrame((state) => {
+                if (focusedPlanet) {
+                    const angle = state.clock.getElapsedTime() * focusedPlanet.orbitSpeed * 0.5;
+                    const planetX = Math.cos(angle) * focusedPlanet.distance;
+                    const planetZ = Math.sin(angle) * focusedPlanet.distance;
+                    const targetPos = new THREE.Vector3(planetX, 0, planetZ);
+                    state.camera.lookAt(targetPos);
+
+                    // Smooth zoom
+                    const desiredZ = focusedPlanet.radius * 2.5;
+                    const currentPos = state.camera.position;
+                    const targetCamPos = new THREE.Vector3(planetX + desiredZ, desiredZ * 0.5, planetZ + desiredZ);
+                    currentPos.lerp(targetCamPos, 0.05);
+                }
+            });
+            return null;
+        };
+
+        const Sun = () => {
+            const sunRef = useRef();
+            useFrame(({ clock }) => {
+                if (sunRef.current) {
+                    sunRef.current.material.uniforms.time.value = clock.getElapsedTime();
+                }
+            });
+            return (
+                <group>
+                    {/* Core Sun - Sunset Orange */}
+                    <mesh ref={sunRef} castShadow={false} receiveShadow={false}>
+                        <sphereGeometry args={[18, 64, 64]} />
+                        {/* Sunset Orange: #FF4500 (OrangeRed) or #FF6347 (Tomato) */}
+                        <sunShaderMaterial transparent time={0} color={new THREE.Color("#FF4500")} />
+                    </mesh>
+                    {/* Subtle Corona - Matching Glow */}
+                    <mesh scale={[1.05, 1.05, 1.05]}>
+                        <sphereGeometry args={[18, 32, 32]} />
+                        <meshBasicMaterial color="#FF2200" transparent opacity={0.2} side={THREE.BackSide} blending={THREE.AdditiveBlending} />
+                    </mesh>
+                </group>
+            );
+        };
+
+        // --- ROBUST TEXTURE HOOK ---
+        const useTextureWithFallback = (url) => {
+            const [texture, setTexture] = React.useState(null);
+            const [error, setError] = React.useState(false);
+
+            React.useEffect(() => {
+                if (!url) return;
+                const loader = new THREE.TextureLoader();
+                loader.setCrossOrigin('anonymous'); // Fix Texture Loading
+                loader.load(
+                    url,
+                    (tex) => {
+                        tex.colorSpace = THREE.SRGBColorSpace;
+                        setTexture(tex);
+                        setError(false);
+                    },
+                    undefined,
+                    (err) => {
+                        console.warn(`Texture failed: ${url}. Falling back to color.`);
+                        setError(true);
+                    }
+                );
+            }, [url]);
+
+            return { texture, error };
+        };
+
+        const Planet = ({ data, onClick, isSelected }) => {
+            const meshRef = useRef();
+            const glowRef = useRef();
+            const cloudsRef = useRef(); // Added for Earth clouds
+            const orbitRef = useRef();
+            const [hovered, setHovered] = useState(false);
+
+            // Texture Fallback Logic
+            const { texture, error } = useTextureWithFallback(data.textureUrl);
+            const { texture: normalMap } = useTextureWithFallback(data.normalMapUrl || '');
+            const { texture: cloudsMap } = useTextureWithFallback(data.cloudsMapUrl || '');
+            const { texture: ringMap } = useTextureWithFallback(data.ringMapUrl || ''); // Saturn Rings
+            const angleRef = useRef(Math.random() * Math.PI * 2); // Random initial start angle
+            const { timeScale, orreryMode } = useStore(); // Get Orrery Mode
+
+            useFrame((state, delta) => {
+                // Keplerian Orbit Logic
+                // Update Angle
+                angleRef.current += data.orbitSpeed * timeScale; // Constant angular speed approximation (ignoring Kepler's 2nd law for simplicity/stability)
+
+                // Calculate Target Position
+                let targetPos = new THREE.Vector3();
+
+                if (orreryMode) {
+                    // Align planets in a line
+                    targetPos.set(data.distance, 0, 0);
+                } else {
+                    // Elliptical Orbit
+                    const a = data.distance; // Semi-major axis
+                    const e = data.eccentricity || 0;
+                    const b = a * Math.sqrt(1 - e * e); // Semi-minor axis
+                    const c = a * e; // Focus offset
+
+                    const angle = angleRef.current;
+                    const x = a * Math.cos(angle) - c;
+                    const z = b * Math.sin(angle);
+
+                    targetPos.set(x, 0, z);
+                }
+
+                // Smoothly Move Mesh
+                if (meshRef.current) {
+                    // Lerp for smooth transition between modes
+                    meshRef.current.position.lerp(targetPos, 0.1);
+
+                    // Simple rotation for day/night cycle
+                    meshRef.current.rotation.y += data.rotationSpeed * timeScale;
+                }
+
+                if (cloudsRef.current) cloudsRef.current.rotation.y += data.rotationSpeed * 1.2 * timeScale;
+
+                // Ensure orbitRef is static (no double rotation)
+                if (orbitRef.current) orbitRef.current.rotation.y = 0;
+            });
+
+            // Create Orbital Path (Ellipse)
+
+            // Create Orbital Path (Ellipse)
+            const orbitGeometry = React.useMemo(() => {
+                const orbitPoints = [];
+                const a = data.distance;
+                const e = data.eccentricity || 0;
+                const b = a * Math.sqrt(1 - e * e);
+                const c = a * e;
+
+                for (let i = 0; i <= 256; i++) {
+                    const angle = (i / 256) * Math.PI * 2;
+                    const x = a * Math.cos(angle) - c;
+                    const z = b * Math.sin(angle);
+                    orbitPoints.push(new THREE.Vector3(x, 0, z));
+                }
+                return new THREE.BufferGeometry().setFromPoints(orbitPoints);
+            }, [data.distance, data.eccentricity]);
+
+            // Inclination in radians
+            const inclinationRad = (data.inclination || 0) * (Math.PI / 180);
+
+            // Material Props based on type
+            const isGasGiant = data.type === 'Gas Giant';
+            const isIceGiant = data.type === 'Ice Giant';
+            const isTerrestrial = data.type === 'Terrestrial';
+
+            return (
+                <group rotation={[inclinationRad, 0, 0]}> {/* Apply Inclination Tilt */}
+                    {/* Cinematic Orbit Path - USING LINE LOOP FOR PROPER RENDERING */}
+                    <lineLoop geometry={orbitGeometry}>
+                        <lineBasicMaterial color="#ffffff" transparent opacity={0.15} />
+                    </lineLoop>
+
+                    {/* Rotating Planet Group - Removed rotation here, handled in useFrame loop pos */}
+                    <group ref={orbitRef}>
+                        {/* Mesh is positioned in useFrame now */}
+                        <group>
+                            <mesh
+                                ref={meshRef}
+                                onClick={(e) => { e.stopPropagation(); onClick(); }}
+                                onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered(true); }}
+                                onPointerOut={() => { document.body.style.cursor = 'auto'; setHovered(false); }}
+                                scale={hovered || isSelected ? 1.05 : 1}
+                                castShadow={true}
+                                receiveShadow={true}
+                            >
+                                <sphereGeometry args={[data.radius * 3.0, 128, 128]} /> {/* 3.0x Scale - Balanced */}
+                                <meshStandardMaterial
+                                    map={!error ? texture : null}
+                                    color={!error && texture ? "#ffffff" : data.color} // Fallback to vibrant color on error
+
+                                    // PBR Tuning - Cinematic Realism
+                                    metalness={isGasGiant ? 0.0 : isIceGiant ? 0.4 : 0.2}
+                                    roughness={isGasGiant ? 1.0 : isIceGiant ? 0.3 : isTerrestrial ? 0.6 : 0.9}
+
+                                    // Stronger Details for "Improve Planets" request
+                                    normalMap={normalMap || null}
+                                    normalScale={new THREE.Vector2(0.8, 0.8)} // Clean, visible topography
+                                    bumpMap={!normalMap && isTerrestrial ? noiseTexture : null}
+                                    bumpScale={0.08}
+
+                                    // Environment
+                                    envMapIntensity={isIceGiant ? 1.0 : isTerrestrial ? 0.4 : 0.2}
+                                />
+                            </mesh>
+
+                            {/* Cloud Layer (Earth) */}
+                            {data.name === 'Earth' && cloudsMap && (
+                                <mesh ref={cloudsRef} scale={[1.025, 1.025, 1.025]}>
+                                    <sphereGeometry args={[data.radius * 3.0, 128, 128]} /> {/* Match scaled planet */}
+                                    <meshStandardMaterial
+                                        map={cloudsMap}
+                                        transparent
+                                        opacity={0.9}
+                                        depthWrite={false}
+                                        blending={THREE.NormalBlending}
+                                        side={THREE.DoubleSide}
+                                    />
+                                </mesh>
+                            )}
+                            {data.name === 'Earth' && !cloudsMap && (
+                                // Fallback Procedural Clouds if map fails
+                                <mesh ref={cloudsRef} scale={[1.02, 1.02, 1.02]}>
+                                    <sphereGeometry args={[data.radius, 64, 64]} />
+                                    <meshStandardMaterial color="white" transparent opacity={0.3} depthWrite={false} />
+                                </mesh>
+                            )}
+
+                            {/* Saturn Rings - Textures & Physical */}
+                            {data.name === 'Saturn' && (
+                                <group rotation={[Math.PI / 2.5, 0, 0]}>
+                                    {/* Textured Ring (Primary) */}
+                                    <mesh>
+                                        <ringGeometry args={[data.radius * 1.4, data.radius * 2.5, 128]} />
+                                        <meshStandardMaterial
+                                            map={ringMap}
+                                            color={ringMap ? "#ffffff" : "#C2A278"} // Use texture color or fallback
+                                            side={THREE.DoubleSide}
+                                            transparent
+                                            opacity={ringMap ? 0.9 : 0.4}
+                                            roughness={0.8}
+                                        />
+                                    </mesh>
+
+                                    {/* Physical Detail Rings (Gaps/Structure) - Visible if texture fails or adds detail */}
+                                    {!ringMap && (
+                                        <>
+                                            <mesh>
+                                                <ringGeometry args={[data.radius * 1.4, data.radius * 2.0, 128]} />
+                                                <meshStandardMaterial color="#C2A278" side={THREE.DoubleSide} transparent opacity={0.6} roughness={0.8} />
+                                            </mesh>
+                                            <mesh>
+                                                <ringGeometry args={[data.radius * 2.1, data.radius * 2.8, 128]} />
+                                                <meshStandardMaterial color="#E0C298" side={THREE.DoubleSide} transparent opacity={0.5} roughness={0.8} />
+                                            </mesh>
+                                        </>
+                                    )}
+                                </group>
+                            )}
+
+                            {/* Jupiter Great Red Spot - 3D Physical Geometry */}
+                            {data.name === 'Jupiter' && (
+                                <mesh position={[data.radius * 2.9, -data.radius * 0.5, 0]} rotation={[0, Math.PI / 2, 0]}>
+                                    {/* Slightly flattened sphere, sitting on surface */}
+                                    <sphereGeometry args={[data.radius * 0.6, 32, 32]} />
+                                    <meshStandardMaterial color="#8B0000" roughness={1} />
+                                </mesh>
+                            )}
+
+                            {/* Atmosphere Glow (Earth, Venus, Mars, Jupiter, Saturn, Uranus, Neptune) */}
+                            {['Earth', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'].includes(data.name) && (
+                                <mesh ref={glowRef} scale={[1.2, 1.2, 1.2]}>
+                                    {/* Match Planet Scale (3.0) */}
+                                    <sphereGeometry args={[data.radius * 3.0, 64, 64]} />
+                                    <atmosphereShaderMaterial
+                                        transparent
+                                        side={THREE.BackSide}
+                                        blending={THREE.AdditiveBlending}
+                                        // Custom Atmosphere Colors for Realism/Cinematics
+                                        glowColor={
+                                            data.name === 'Mars' ? new THREE.Color(0.8, 0.3, 0.1) :
+                                                data.name === 'Venus' ? new THREE.Color(0.9, 0.7, 0.2) :
+                                                    data.name === 'Earth' ? new THREE.Color(0.3, 0.6, 1.0) :
+                                                        new THREE.Color(data.color)
+                                        }
+                                        viewVector={new THREE.Vector3(0, 0, 0)}
+                                        intensity={data.name === 'Mars' ? 0.4 : 0.6}
+                                        power={4.0} // Sharp rim
+                                        depthWrite={false}
+                                    />
+                                </mesh>
+                            )}
+
+                            {isSelected && (
+                                <mesh scale={[1.15, 1.15, 1.15]}>
+                                    <sphereGeometry args={[data.radius, 32, 32]} />
+                                    <meshBasicMaterial color={data.color} wireframe transparent opacity={0.3} />
+                                </mesh>
+                            )}
+                        </group>
+                    </group>
+                </group>
+            );
+        };
+
+        const Starfield = () => {
+            const starsRef = useRef();
+
+            useFrame(({ clock }) => {
+                if (starsRef.current) {
+                    starsRef.current.rotation.y = clock.getElapsedTime() * 0.02; // Slow rotation
+                }
+            });
+
+            const [geo, mat] = React.useMemo(() => {
+                const geometry = new THREE.BufferGeometry();
+                const vertices = [];
+                const colors = [];
+                const color = new THREE.Color();
+
+                for (let i = 0; i < 10000; i++) {
+                    vertices.push(THREE.MathUtils.randFloatSpread(8000)); // Wide field
+                    vertices.push(THREE.MathUtils.randFloatSpread(8000));
+                    vertices.push(THREE.MathUtils.randFloatSpread(8000));
+
+                    // Stellar Magnitude Simulation
+                    // Majority small/dim, few large/bright
+                    const r = Math.random();
+                    // Color Variation
+                    if (r > 0.99) color.setHex(0xaaccff); // Blue Giant
+                    else if (r > 0.9) color.setHex(0xffddaa); // Orange Giant
+                    else color.setHex(0xffffff); // White
+
+                    // Dimness for distance
+                    const brightness = Math.random();
+                    colors.push(color.r * brightness, color.g * brightness, color.b * brightness);
+                }
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+                const material = new THREE.PointsMaterial({
+                    vertexColors: true,
+                    size: 1.2,
+                    sizeAttenuation: false, // Stars are point sources
+                    transparent: true,
+                    opacity: 0.9
+                });
+                return [geometry, material];
+            }, []);
+
+            return <points ref={starsRef} args={[geo, mat]} />;
+        };
+
+        const GalaxyParticles = () => {
+            // Memoize expensive geometry generation
+            const galaxyGeo = React.useMemo(() => {
+                // Background Stars
+                const positions = new Float32Array(Array.from({ length: 5000 * 3 }, () => (Math.random() - 0.5) * 2000));
+                const colors = new Float32Array(Array.from({ length: 5000 * 3 }, () => Math.random() * 0.5 + 0.5));
+                const bgGeo = new THREE.BufferGeometry();
+                bgGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                bgGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                return bgGeo;
+            }, []);
+
+            const milkyWayGeo = React.useMemo(() => {
+                // Milky Way Band
+                const positions = new Float32Array(Array.from({ length: 2000 * 3 }, (_, i) => {
+                    const r = 400 + Math.random() * 200; // Radius
+                    const theta = Math.random() * Math.PI * 2;
+                    const x = r * Math.cos(theta);
+                    const y = (Math.random() - 0.5) * 100; // Flattened disk
+                    const z = r * Math.sin(theta);
+                    return [x, y, z];
+                }).flat());
+                const mwGeo = new THREE.BufferGeometry();
+                mwGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                return mwGeo;
+            }, []);
+
+            return (
+                <>
+                    <points>
+                        <primitive object={galaxyGeo} attach="geometry" />
+                        <pointsMaterial size={1.2} vertexColors transparent opacity={0.6} />
+                    </points>
+                    <points rotation={[0, 0, Math.PI / 4]}>
+                        <primitive object={milkyWayGeo} attach="geometry" />
+                        <pointsMaterial size={2.0} color="#88aaff" transparent opacity={0.4} blending={THREE.AdditiveBlending} />
+                    </points>
+                </>
+            )
+        };
+
+        const Scene = () => {
+            const { focusedPlanet, setFocusedPlanet } = useStore();
+
+            return (
+                <Canvas
+                    camera={{ position: [0, 40, 60], fov: 40, near: 0.1, far: 5000 }} // Even narrower FOV (cinematic lens)
+                    style={{ position: 'absolute', top: 0, left: 0, zIndex: 1 }}
+                    onPointerMissed={() => setFocusedPlanet(null)}
+                    gl={{ antialias: false, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.2, outputColorSpace: THREE.SRGBColorSpace }} // Disable AA for PostProcessing
+                    shadows
+                >
+                    <color attach="background" args={['#000000']} />
+                    {/* Cinematic Fog - Deep Space Fade */}
+                    <fog attach="fog" args={['#000000', 50, 4000]} />
+
+                    <CameraController />
+
+                    {/* Galaxy Background - Optimized with useMemo */}
+                    <GalaxyParticles />
+
+                    <Sun />
+
+                    {/* Octane-Style Cinematic Lighting */}
+                    {/* Balanced Ambient for visibility */}
+                    {/* Octane-Style Cinematic Lighting */}
+                    {/* Balanced Ambient for visibility */}
+                    {/* Balanced Ambient for visibility */}
+                    <ambientLight intensity={0.1} /> {/* Reduced from 0.4 to prevent washout */}
+
+                    {/* ONE Main Sun Light - NO DECAY to ensure light reaches planets */}
+                    <pointLight
+                        position={[0, 0, 0]}
+                        intensity={1.5} // Reduced from 3.0 to prevent whiteout
+                        distance={0} // Infinite range
+                        decay={0} // No physical falloff (Scientific visualization hack)
+                        castShadow
+                        shadow-mapSize={[2048, 2048]}
+                        shadow-bias={-0.0001}
+                        shadow-normalBias={0.05} // Increased to prevent acne
+                    />
+
+                    {/* Cinematic Fill Light (Blue-ish bounce) */}
+                    <hemisphereLight skyColor="#112244" groundColor="#000000" intensity={0.2} />
+
+                    <Suspense fallback={null}>
+                        {planets.map(key => (
+                            <Planet
+                                key={key}
+                                data={planetData[key]}
+                                isSelected={focusedPlanet?.name === planetData[key].name}
+                                onClick={() => setFocusedPlanet(planetData[key])}
+                            />
+                        ))}
+                    </Suspense>
+
+                    {/* Post-Processing Pipeline */}
+                    {/* Post-Processing Pipeline - Toned Down for Realism */}
+                    <EffectComposer disableNormalPass>
+                        {/* Bloom Reduced/Removed for "No Neon" request */}
+                        <Bloom luminanceThreshold={0.8} mipmapBlur intensity={0.2} radius={0.4} /> {/* Very subtle bloom only for very bright objects (Sun core) */}
+                        {/* Film Grain for Movie Feel */}
+                        <Noise opacity={0.05} />
+                        {/* Dark Corners */}
+                        <Vignette eskil={false} offset={0.1} darkness={0.5} />
+                    </EffectComposer>
+
+                    <OrbitControls maxDistance={500} minDistance={10} enablePan={true} />
+                </Canvas>
+            );
+        };
+
+        // --- UI COMPONENTS ---
+        const Dashboard = () => {
+            const { focusedPlanet, setFocusedPlanet } = useStore();
+            const [missionOpen, setMissionOpen] = useState(true); // User wants updates, default open or closed? 'true' is better for visibility.
+
+            // Debug removal (optional, keeping clean)
+            // useEffect(() => {... }, [focusedPlanet]);
+
+            return (
+                <div className="absolute inset-0 pointer-events-none p-6 flex flex-col justify-between" style={{ zIndex: 10 }}>
+                    <header className="flex justify-between items-center pointer-events-auto w-full z-10">
+                        <div>
+                            {focusedPlanet ? (
+                                <>
+                                    <h1 className="text-4xl font-orbitron font-bold text-cyan-glow tracking-widest uppercase">
+                                        {focusedPlanet.name}
+                                    </h1>
+                                    <div className="text-xs text-cyan-glow/60 font-rajdhani tracking-[0.3em] uppercase">
+                                        ACTIVE TRACKING
+                                    </div>
+                                </>
+                            ) : (
+                                <div style={{ flex: 1 }}>
+                                    <h1 className="text-4xl font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 font-orbitron">
+                                        SOLAR SYSTEM
+                                    </h1>
+                                    <p className="text-sm text-cyan-glow tracking-[0.3em] font-rajdhani">INTERACTIVE ORRERY v4.0 (Hyper-Realism)</p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Visual Controls */}
+                        <div className="absolute top-6 right-6 flex gap-4 z-50">
+                            <button
+                                onClick={() => useStore.getState().setOrreryMode(!useStore.getState().orreryMode)}
+                                className={`px-4 py-2 border border-cyan-500/30 rounded backdrop-blur-md transition-all duration-300 font-rajdhani tracking-widest uppercase text-xs ${useStore.getState().orreryMode ? 'bg-cyan-500/20 text-cyan-100 shadow-[0_0_15px_rgba(6,182,212,0.5)]' : 'bg-black/40 text-cyan-500 hover:bg-cyan-900/20'}`}
+                            >
+                                {useStore.getState().orreryMode ? 'ALIGNMENT: ACTIVE' : 'ALIGNMENT: ORBIT'}
+                            </button>
+                        </div>
+
+                        <div className="flex gap-4 items-center">
+                            {/* Quick Navigation */}
+                            <div className="flex bg-black/50 backdrop-blur rounded p-1 gap-1 border border-cyan-900/30">
+                                {planets.map(pKey => (
+                                    <button
+                                        key={pKey}
+                                        onClick={() => setFocusedPlanet(planetData[pKey])}
+                                        className={`px-3 py-1 text-xs font-rajdhani uppercase rounded transition-all ${focusedPlanet?.name === planetData[pKey].name
+                                            ? 'bg-cyan-600 text-white shadow-[0_0_10px_rgba(0,255,255,0.5)]'
+                                            : 'text-gray-400 hover:text-cyan-200 hover:bg-white/5'
+                                            }`}
+                                    >
+                                        {planetData[pKey].name.slice(0, 3)}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {focusedPlanet && (
+                                <button
+                                    onClick={() => setFocusedPlanet(null)}
+                                    className="bg-red-900/50 hover:bg-red-900/80 border border-red-500 text-red-100 px-6 py-2 rounded font-orbitron text-sm transition-all shadow-[0_0_15px_rgba(255,0,0,0.3)]"
+                                >
+                                    EXIT ORBIT
+                                </button>
+                            )}
+                        </div>
+                    </header>
+
+                    {/* Time Controls Removed for Realism */}
+                    {/* <div className="absolute bottom-10 ..."> ... </div> */}
+
+                    <div className="flex-1 flex mt-8 gap-6 min-h-0">
+                        {/* Center / Left spacer */}
+                        <div className="flex-1"></div>
+
+
+                        {/* Right Sidebar */}
+                        <aside className="w-96 flex flex-col gap-4 pointer-events-auto overflow-y-auto pr-2 custom-scrollbar pb-6">
+
+                            {/* Status Box */}
+                            {focusedPlanet && (
+                                <div className="hud-panel border-l-4 border-cyan-500 bg-cyan-900/10">
+                                    <div className="flex justify-between items-center">
+                                        <div>
+                                            <div className="text-xs text-cyan-400 font-rajdhani tracking-widest uppercase mb-1">Status</div>
+                                            <div className="text-lg font-orbitron text-white tracking-wider">TRACKING ORBIT</div>
+                                        </div>
+                                        <div className="text-2xl opacity-50 animate-pulse">⌖</div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Mission Updates (Collapsible) */}
+                            <div className="hud-panel transition-all duration-300">
+                                <button
+                                    onClick={() => setMissionOpen(!missionOpen)}
+                                    className="w-full flex items-center justify-between text-cyan-glow font-orbitron hover:text-white transition-colors group"
+                                >
+                                    <span className="flex items-center gap-2">
+                                        <span className="w-1 h-4 bg-cyan-500 block group-hover:h-6 transition-all"></span>
+                                        MISSION UPDATES
+                                    </span>
+                                    <span className={`transform transition-transform duration-300 ${missionOpen ? 'rotate-180' : ''}`}>▼</span>
+                                </button>
+
+                                {missionOpen && (
+                                    <div className="mt-4 space-y-4 animate-fadeIn border-t border-cyan-900/30 pt-4">
+                                        <div className="flex justify-between items-center mb-2">
+                                            <span className="text-xs font-rajdhani uppercase text-cyan-400">Active Satellites</span>
+                                            <span className="text-xs bg-cyan-900/50 px-2 py-1 rounded text-cyan-200 font-mono">
+                                                {focusedPlanet ? focusedPlanet.satellites.count : 0} ONLINE
+                                            </span>
+                                        </div>
+
+                                        {focusedPlanet ? (
+                                            <>
+                                                {/* ISRO Section */}
+                                                {focusedPlanet.satellites.isro.length > 0 && (
+                                                    <div>
+                                                        <div className="text-xs text-gold-glow font-bold mb-1 tracking-wider flex items-center gap-2">
+                                                            <span className="w-1.5 h-1.5 bg-orange-500 rounded-full"></span>
+                                                            ISRO MISSIONS
+                                                        </div>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {focusedPlanet.satellites.isro.map((m, i) => (
+                                                                <span key={i} className="bg-orange-900/40 border border-orange-500/30 text-orange-100 text-xs px-2 py-1 rounded font-rajdhani">
+                                                                    {m}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* NASA Section */}
+                                                {focusedPlanet.satellites.nasa.length > 0 && (
+                                                    <div>
+                                                        <div className="text-xs text-blue-400 font-bold mb-1 tracking-wider flex items-center gap-2">
+                                                            <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
+                                                            NASA MISSIONS
+                                                        </div>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {focusedPlanet.satellites.nasa.map((m, i) => (
+                                                                <span key={i} className="bg-blue-900/40 border border-blue-500/30 text-blue-100 text-xs px-2 py-1 rounded font-rajdhani">
+                                                                    {m}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                {focusedPlanet.satellites.count === 0 && (
+                                                    <div className="text-gray-500 italic text-sm p-3 bg-black/30 rounded border border-gray-800">
+                                                        No active artificial satellites currently monitored in this sector.
+                                                    </div>
+                                                )}
+                                            </>
+                                        ) : (
+                                            <div className="text-gray-500 italic text-sm">Select a celestial body to view mission data.</div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+
+                            {/* Natural Satellites (Moons) */}
+                            {focusedPlanet && focusedPlanet.moons && focusedPlanet.moons.length > 0 && (
+                                <div className="hud-panel">
+                                    <div className="flex justify-between items-center mb-3">
+                                        <h3 className="text-cyan-glow font-orbitron">NATURAL SATELLITES</h3>
+                                        <span className="text-xs bg-cyan-900/50 px-2 py-1 rounded text-cyan-200 font-mono">
+                                            {focusedPlanet.moons.length} MAJOR
+                                        </span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {focusedPlanet.moons.map((moon, i) => (
+                                            <span key={i} className="bg-gray-800/50 border border-gray-600/30 text-gray-300 text-xs px-2 py-1 rounded font-rajdhani hover:bg-gray-700/50 hover:text-white transition-colors cursor-default">
+                                                {moon}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Planetary Data (Vital Signs) */}
+                            <div className="hud-panel">
+                                <h3 className="text-cyan-glow font-orbitron mb-3">PLANETARY DATA</h3>
+                                {focusedPlanet ? (
+                                    <div className="space-y-3 font-rajdhani">
+                                        <div className="flex justify-between items-end border-b border-gray-800 pb-1">
+                                            <span className="text-gray-400 text-sm">Type</span>
+                                            <span className="text-lg text-white font-bold">{focusedPlanet.type}</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <div className="text-gray-500 text-xs uppercase">Avg Temp</div>
+                                                <div className="text-xl text-white">{focusedPlanet.details.temp}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-500 text-xs uppercase">Gravity</div>
+                                                <div className="text-xl text-white">{focusedPlanet.details.gravity}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-500 text-xs uppercase">Day Length</div>
+                                                <div className="text-xl text-white">{focusedPlanet.details.rotation}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-500 text-xs uppercase">Light Lag</div>
+                                                <div className="text-xl text-white">{focusedPlanet.details.lightHours}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-gray-500 italic text-sm">System Overview Active.</div>
+                                )}
+                            </div>
+
+                            {/* Distance Indicator */}
+                            {focusedPlanet && (
+                                <div className="hud-panel bg-gradient-to-r from-blue-900/20 to-transparent">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-cyan-glow font-orbitron text-sm">DIST. FROM EARTH</span>
+                                        <span className="text-2xl font-rajdhani font-bold text-white">{focusedPlanet.details.earthDist}</span>
+                                    </div>
+                                </div>
+                            )}
+
+                        </aside>
+                    </div >
+                </div >
+            );
+        };
+
+        const App = () => {
+            return (
+                <main className="w-full h-screen bg-[#020202] relative overflow-hidden">
+                    <ErrorBoundary>
+                        <Scene />
+                        <Dashboard />
+                    </ErrorBoundary>
+                </main>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>

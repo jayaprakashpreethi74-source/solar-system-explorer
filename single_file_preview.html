@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar System Explorer (Standalone)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'space-dark': '#050505',
+                        'space-darker': '#020202',
+                        'cyan-glow': '#00f0ff',
+                        'gold-glow': '#ffd700',
+                        'border': '#1a1a1a'
+                    },
+                    fontFamily: {
+                        'orbitron': ['Orbitron', 'sans-serif'],
+                        'rajdhani': ['Rajdhani', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@300;500;700&display=swap"
+        rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            color: white;
+        }
+
+        .hud-panel {
+            background: rgba(5, 5, 5, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(0, 240, 255, 0.3);
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 0 20px rgba(0, 240, 255, 0.1);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <!-- Import Map for React and Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "three": "https://esm.sh/three@0.160.0",
+                "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.12?external=react,react-dom,three",
+                "@react-three/drei": "https://esm.sh/@react-three/drei@9.96.1?external=react,react-dom,three,@react-three/fiber",
+                "zustand": "https://esm.sh/zustand@4.4.7?external=react",
+                "framer-motion": "https://esm.sh/framer-motion@10.16.16?external=react,react-dom"
+            }
+        }
+    </script>
+
+    <!-- Application Code -->
+    <script type="module">
+        import React, { useState, useEffect, useRef, Suspense } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import * as THREE from 'three';
+        import { Canvas, useFrame, useLoader } from '@react-three/fiber';
+        import { OrbitControls } from '@react-three/drei';
+        import { create } from 'zustand';
+        import { motion } from 'framer-motion';
+
+        // --- DATA ---
+        const planetData = {
+            mercury: { name: 'Mercury', radius: 0.38, distance: 15, orbitSpeed: 0.02, rotationSpeed: 0.004, temperature: '167°C', gravity: '3.7 m/s²', color: '#8C7853' },
+            venus: { name: 'Venus', radius: 0.95, distance: 22, orbitSpeed: 0.015, rotationSpeed: 0.002, temperature: '464°C', gravity: '8.9 m/s²', color: '#FFC649' },
+            earth: { name: 'Earth', radius: 1, distance: 30, orbitSpeed: 0.01, rotationSpeed: 0.02, temperature: '15°C', gravity: '9.8 m/s²', color: '#4A90E2' },
+            mars: { name: 'Mars', radius: 0.53, distance: 40, orbitSpeed: 0.008, rotationSpeed: 0.018, temperature: '-65°C', gravity: '3.7 m/s²', color: '#CD5C5C' },
+            jupiter: { name: 'Jupiter', radius: 2.5, distance: 55, orbitSpeed: 0.005, rotationSpeed: 0.04, temperature: '-110°C', gravity: '23.1 m/s²', color: '#C88B3A' },
+            saturn: { name: 'Saturn', radius: 2.2, distance: 70, orbitSpeed: 0.003, rotationSpeed: 0.038, temperature: '-140°C', gravity: '9.0 m/s²', color: '#FAD5A5' },
+            uranus: { name: 'Uranus', radius: 1.8, distance: 85, orbitSpeed: 0.002, rotationSpeed: 0.03, temperature: '-195°C', gravity: '8.7 m/s²', color: '#4FD0E7' },
+            neptune: { name: 'Neptune', radius: 1.7, distance: 95, orbitSpeed: 0.001, rotationSpeed: 0.032, temperature: '-200°C', gravity: '11.0 m/s²', color: '#4169E1' }
+        };
+        const planets = Object.keys(planetData);
+
+        // --- STORE ---
+        const useStore = create((set) => ({
+            focusedPlanet: null,
+            setFocusedPlanet: (planet) => set({ focusedPlanet: planet }),
+            satelliteCount: { earth: 8234, mars: 8, venus: 3, mercury: 2, jupiter: 2, saturn: 1, uranus: 0, neptune: 0 },
+            missions: [
+                { name: 'Chandrayaan-3', agency: 'ISRO', date: '2023' },
+                { name: 'Aditya-L1', agency: 'ISRO', date: '2023' },
+                { name: 'Perseverance', agency: 'NASA', date: '2021' }
+            ]
+        }));
+
+        // --- COMPONENTS ---
+
+        const Sun = () => {
+            return (
+                <group>
+                    <mesh>
+                        <sphereGeometry args={[8, 32, 32]} />
+                        <meshBasicMaterial color="#FDB813" />
+                    </mesh>
+                    <pointLight intensity={2} distance={200} decay={2} color="#FDB813" />
+                    <ambientLight intensity={0.2} />
+                </group>
+            );
+        };
+
+        const Planet = ({ data, onClick, isSelected }) => {
+            const meshRef = useRef();
+            const orbitRef = useRef();
+            const [hovered, setHovered] = useState(false);
+
+            useFrame((state, delta) => {
+                if (orbitRef.current) orbitRef.current.rotation.y += data.orbitSpeed * 0.5;
+                if (meshRef.current) meshRef.current.rotation.y += data.rotationSpeed;
+            });
+
+            // Orbit path
+            const orbitPath = new THREE.EllipseCurve(0, 0, data.distance, data.distance, 0, 2 * Math.PI, false, 0);
+            const points = orbitPath.getPoints(100);
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+
+            return (
+                <group>
+                    {/* Orbit Line */}
+                    <line geometry={geometry} rotation={[Math.PI / 2, 0, 0]}>
+                        <lineBasicMaterial attach="material" color={data.color} opacity={0.3} transparent />
+                    </line>
+
+                    {/* Planet System (Pivot at 0,0,0, Planet offset by distance) */}
+                    <group ref={orbitRef}>
+                        <mesh
+                            ref={meshRef}
+                            position={[data.distance, 0, 0]}
+                            onClick={(e) => { e.stopPropagation(); onClick(); }}
+                            onPointerOver={() => setHovered(true)}
+                            onPointerOut={() => setHovered(false)}
+                            scale={isSelected || hovered ? 1.2 : 1}
+                        >
+                            <sphereGeometry args={[data.radius, 32, 32]} />
+                            <meshStandardMaterial color={data.color} metalness={0.2} roughness={0.7} />
+                            {isSelected && (
+                                <mesh scale={[1.2, 1.2, 1.2]}>
+                                    <sphereGeometry args={[data.radius, 32, 32]} />
+                                    <meshBasicMaterial color={data.color} wireframe transparent opacity={0.3} />
+                                </mesh>
+                            )}
+                        </mesh>
+                    </group>
+                </group>
+            );
+        };
+
+        const Starfield = () => {
+            const points = useRef();
+            useFrame((state, delta) => {
+                if (points.current) points.current.rotation.y += delta * 0.05;
+            });
+
+            const stars = new Float32Array(5000 * 3);
+            for (let i = 0; i < 5000 * 3; i++) stars[i] = (Math.random() - 0.5) * 800;
+
+            return (
+                <points ref={points}>
+                    <bufferGeometry>
+                        <bufferAttribute attach="attributes-position" count={5000} array={stars} itemSize={3} />
+                    </bufferGeometry>
+                    <pointsMaterial size={0.5} color="white" transparent opacity={0.8} sizeAttenuation />
+                </points>
+            );
+        };
+
+        const Scene = () => {
+            const { focusedPlanet, setFocusedPlanet } = useStore();
+
+            return (
+                <Canvas camera={{ position: [0, 40, 60], fov: 60 }} style={{ position: 'absolute', top: 0, left: 0, zIndex: -1 }}>
+                    <color attach="background" args={['#050505']} />
+                    <Starfield />
+                    <Sun />
+                    {planets.map(key => (
+                        <Planet
+                            key={key}
+                            data={planetData[key]}
+                            isSelected={focusedPlanet?.name === planetData[key].name}
+                            onClick={() => setFocusedPlanet(planetData[key])}
+                        />
+                    ))}
+                    <OrbitControls maxDistance={150} minDistance={10} />
+                </Canvas>
+            );
+        };
+
+        // --- UI COMPONENTS ---
+        const Dashboard = () => {
+            const { focusedPlanet, setFocusedPlanet, satelliteCount, missions } = useStore();
+
+            return (
+                <div className="absolute inset-0 pointer-events-none p-6 flex flex-col justify-between">
+                    <header className="flex justify-between items-start pointer-events-auto">
+                        <h1 className="text-4xl font-orbitron font-bold text-cyan-glow">
+                            SOLAR SYSTEM <span className="text-gold-glow">EXPLORER</span>
+                        </h1>
+                        {focusedPlanet && (
+                            <button
+                                onClick={() => setFocusedPlanet(null)}
+                                className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-2 rounded"
+                            >
+                                EXIT FOCUS
+                            </button>
+                        )}
+                    </header>
+
+                    <div className="flex-1 flex mt-8 gap-6">
+                        <div className="flex-1"></div>
+                        <aside className="w-80 flex flex-col gap-4 pointer-events-auto">
+                            {/* Satellites */}
+                            <div className="hud-panel">
+                                <h3 className="text-cyan-glow font-orbitron mb-2">Satellite Tracker</h3>
+                                {focusedPlanet ? (
+                                    <div className="text-2xl font-bold text-white">
+                                        {satelliteCount[focusedPlanet.name.toLowerCase()] || 0} <span className="text-sm text-gray-400">Active</span>
+                                    </div>
+                                ) : (
+                                    <div className="text-gray-500 italic">Select a planet</div>
+                                )}
+                            </div>
+
+                            {/* Vital Signs */}
+                            <div className="hud-panel">
+                                <h3 className="text-cyan-glow font-orbitron mb-2">Vital Signs</h3>
+                                {focusedPlanet ? (
+                                    <div className="space-y-2 text-sm">
+                                        <div className="flex justify-between"><span className="text-gray-400">Temp</span> <span>{focusedPlanet.temperature}</span></div>
+                                        <div className="flex justify-between"><span className="text-gray-400">Gravity</span> <span>{focusedPlanet.gravity}</span></div>
+                                        <div className="flex justify-between"><span className="text-gray-400">Orbit</span> <span>{focusedPlanet.orbitSpeed * 1000} km/s</span></div>
+                                    </div>
+                                ) : (
+                                    <div className="text-gray-500 italic">Select a planet</div>
+                                )}
+                            </div>
+
+                            {/* Missions */}
+                            <div className="hud-panel flex-1">
+                                <h3 className="text-gold-glow font-orbitron mb-2">Mission Log</h3>
+                                <div className="space-y-3">
+                                    {missions.map((m, i) => (
+                                        <div key={i} className="border-l-2 border-gold-glow pl-2">
+                                            <div className="text-white font-bold text-sm">{m.name}</div>
+                                            <div className="text-xs text-gray-400">{m.agency} • {m.date}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </aside>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            return (
+                <>
+                    <Scene />
+                    <Dashboard />
+                </>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>
