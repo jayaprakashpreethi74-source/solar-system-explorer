@@ -1,4 +1,11 @@
+<<<<<<< HEAD
 # 🌌 Solar System Explorer
+=======
+# Solar System Explorer - Setup Guide
+<img width="733" height="854" alt="image" src="https://github.com/user-attachments/assets/91160b79-bd63-41b2-8d3f-05a9051c51ee" />
+
+
+>>>>>>> c0304f92073bd235c84b2b1bcef936871b8fc214
 
 An immersive, fully interactive 3D simulation of the solar system built with React, Three.js, and React Three Fiber.
 
