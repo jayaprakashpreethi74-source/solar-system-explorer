@@ -1,4 +1,7 @@
 # Solar System Explorer - Setup Guide
+<img width="733" height="854" alt="image" src="https://github.com/user-attachments/assets/91160b79-bd63-41b2-8d3f-05a9051c51ee" />
+
+
 
 ## Prerequisites
 This project requires **Node.js** to be installed on your system.
