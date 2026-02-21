@@ -1,29 +1,72 @@
-# Solar System Explorer - Setup Guide
+# 🌌 Solar System Explorer
 
-## Prerequisites
-This project requires **Node.js** to be installed on your system.
-It seems Node.js is currently missing or not in your system path.
+An immersive, fully interactive 3D simulation of the solar system built with React, Three.js, and React Three Fiber.
 
-### 1. Install Node.js
-1.  Go to [nodejs.org](https://nodejs.org/)
-2.  Download and install the **LTS version** (Recommended for most users).
-3.  Follow the installer prompts (default settings are fine).
+![Solar System Explorer Demo](demo-placeholder.png) <!-- Add a screenshot or GIF here! -->
 
-### 2. Verify Installation
-1.  **Restart your computer** or at least **restart your terminal/VS Code** to update the system path.
-2.  Open a terminal and run:
+## ✨ Features
+
+*   **Interactive 3D Environment:** Navigate through a fully realized 3D model of our solar system.
+*   **Realistic Rendering:** Features custom WebGL planet shaders and post-processing glow effects for a highly realistic spatial environment.
+*   **Informative Overlays:** Interactive UI overlay providing real-time data on planets, including satellite counters and detailed planetary information.
+*   **Sleek Aesthetics:** Modern glassmorphism interface built with Tailwind CSS, accented with subtle scanline and noise effects for a sci-fi feel.
+*   **Optimized Performance:** Smooth 60fps rendering of complex geometries like starfields, orbital paths, and the Sun.
+
+## 🛠️ Technologies Used
+
+*   **Core:** React.js, Vite
+*   **3D Graphics:** Three.js, React Three Fiber (`@react-three/fiber`), Drei (`@react-three/drei`)
+*   **Shaders/Effects:** Custom WebGL Shaders, Postprocessing (`postprocessing`, `@react-three/postprocessing`)
+*   **Styling:** Tailwind CSS, PostCSS, Autoprefixer
+*   **State Management:** Zustand (`zustand`)
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+*   Node.js (v18 or higher recommended)
+*   npm or yarn
+
+### Installation
+
+1.  Clone the repository:
     ```bash
-    node --version
-    npm --version
+    git clone https://github.com/yourusername/solar-system-explorer.git
+    cd solar-system-explorer
     ```
-    You should see version numbers (e.g., `v20.x.x`).
 
-### 3. Run the App
-Double-click `start_app.bat` in this folder, or run:
+2.  Install dependencies:
+    ```bash
+    npm install
+    # or
+    yarn install
+    ```
+
+3.  Start the development server:
+    ```bash
+    npm run dev
+    # or
+    yarn dev
+    ```
+
+4.  Open your browser and navigate to `http://localhost:5173`.
+
+## 📦 Building for Production
+
+To create a production-ready build:
+
 ```bash
-npm install
-npm run dev
+npm run build
+# or
+yarn build
 ```
 
-## Troubleshooting
-If you still see "npm is not recognized", try re-installing Node.js and ensuring the "Add to PATH" option is checked during installation.
+The built files will be located in the `dist` directory.
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome!
+
+## 📝 License
+
+This project is open-source and available under the [MIT License](LICENSE).
